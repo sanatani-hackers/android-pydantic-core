@@ -19,7 +19,7 @@ on:
           non-empty value (either from this input directly, or parsed
           from pydantic_core_ref if it happens to look like a version).
         required: false
-        default: ""
+        default: "2.41.5"
       dry_run:
         description: "Build and smoke-test only; never publish a GitHub Release."
         required: false
