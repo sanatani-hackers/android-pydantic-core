@@ -5,21 +5,34 @@ on:
     inputs:
       pydantic_core_ref:
         description: >-
-          Git ref to build, resolved against pydantic/pydantic (the
-          monorepo pydantic-core now lives in). Can be "main", a branch,
-          or a commit SHA. check_upstream.yml always passes an exact
-          commit SHA here.
+          Git ref to build, resolved against source_repo. Can be "main", a
+          branch, a tag (e.g. v2.41.5) or a commit SHA. check_upstream.yml
+          always passes an exact commit SHA here.
         required: true
         default: "main"
+      source_repo:
+        description: >-
+          Repo to build from. Use pydantic/pydantic for the monorepo (new
+          versions, e.g. 2.50+). Use pydantic/pydantic-core for older tags
+          (e.g. v2.41.5), where the crate lives at the repo root.
+        required: false
+        default: "pydantic/pydantic"
+      manifest_path:
+        description: >-
+          Path to pydantic-core's Cargo.toml inside source_repo. Monorepo:
+          pydantic-core/Cargo.toml. Old standalone repo: Cargo.toml.
+        required: false
+        default: "pydantic-core/Cargo.toml"
       release_version:
         description: >-
           Exact pydantic-core version this ref corresponds to. Set
           automatically by check_upstream.yml. Leave empty for an ad hoc
-          build — a release is only published when this resolves to a
+          build - a release is only published when this resolves to a
           non-empty value (either from this input directly, or parsed
           from pydantic_core_ref if it happens to look like a version).
+          If set, the build fails when Cargo.toml's version does not match.
         required: false
-        default: "2.41.5"
+        default: ""
       dry_run:
         description: "Build and smoke-test only; never publish a GitHub Release."
         required: false
@@ -77,12 +90,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout pydantic (monorepo containing pydantic-core)
+      - name: Checkout pydantic-core source
         uses: actions/checkout@v4
         with:
-          repository: pydantic/pydantic
+          repository: ${{ inputs.source_repo }}
           ref: ${{ inputs.pydantic_core_ref }}
-          path: pydantic-monorepo
+          path: core-src
+
+      - name: Verify Cargo.toml version matches release_version
+        env:
+          MANIFEST: core-src/${{ inputs.manifest_path }}
+          EXPECTED: ${{ needs.discover.outputs.release_version }}
+        run: |
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::Manifest not found: $MANIFEST (check source_repo / manifest_path / ref)"
+            exit 1
+          fi
+          ACTUAL=$(grep -m1 -E '^version[[:space:]]*=' "$MANIFEST" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          echo "Cargo.toml version: ${ACTUAL:-<not found>}"
+          if [ -n "$EXPECTED" ] && [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Version mismatch: Cargo.toml has $ACTUAL but release_version is $EXPECTED"
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -119,7 +148,7 @@ jobs:
             --python-version ${{ needs.discover.outputs.python_version }} \
             --android-api-level ${{ env.ANDROID_API_LEVEL }} \
             --ndk-home ${{ steps.ndk.outputs.ndk-path }} \
-            --manifest-path pydantic-monorepo/pydantic-core/Cargo.toml \
+            --manifest-path core-src/${{ inputs.manifest_path }} \
             --out-dir dist \
             --cache-dir .ci-cache \
             --github-output "$GITHUB_OUTPUT"
